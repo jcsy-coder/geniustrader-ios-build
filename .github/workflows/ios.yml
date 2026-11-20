@@ -55,6 +55,9 @@ jobs:
                   "$app/Contents/Info.plist" 2>/dev/null || echo 0)
             echo "· $app → $v"
             major="${v%%.*}"
+            # 2026-11-20 苹果 ITMS-90725：2027-04 起必须用 iOS 27 SDK。到那时把阈值改成 27，
+            # 并确认 runner 镜像自带 Xcode 27（仓库变量 MACOS_RUNNER）。循环取最后一个命中的，
+            # 所以镜像里同时有 26/27 时自动挑 27。
             if [ "${major:-0}" -ge 26 ] 2>/dev/null; then picked="$app"; fi
           done
           if [ -z "$picked" ]; then
