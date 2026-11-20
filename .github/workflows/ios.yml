@@ -1,0 +1,257 @@
+name: iOS · 出 ipa 并传 TestFlight
+
+# 为什么要在 GitHub 上跑：ipa 只能由 macOS 上的 Xcode 编译出来，Windows 做不了。
+# 这个 runner 是苹果的机器，跑完把 ipa 当产物给你；签名用你的 App Store Connect
+# API Key 自动完成，证书和 profile 由 xcodebuild 现场申请，不需要你手动签任何东西。
+#
+# 没配密钥时不会红：自动降级成「未签名编译验证」，只证明代码能编过，不出包。
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: 编译完成后自动上传 TestFlight
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCHEME: GeniusTrader
+  PROJECT: GeniusTrader.xcodeproj
+  BUNDLE_ID: cn.myshiwu.geniustrader
+
+jobs:
+  build:
+    name: Archive → ipa
+    # macos-26 自带 Xcode 26（液态玻璃必须）。若某个时间点这个 label 不存在，
+    # 不用改代码：仓库 Settings → Variables 里加一个 MACOS_RUNNER=macos-15 即可。
+    runs-on: ${{ vars.MACOS_RUNNER || 'macos-26' }}
+    timeout-minutes: 60
+
+    steps:
+      - name: 取下源码
+        uses: actions/checkout@v4
+
+      - name: 解密源码（仓库里只有密文，明文只存在这台一次性 runner 上）
+        env:
+          MIRROR_KEY: ${{ secrets.MIRROR_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MIRROR_KEY:-}" ]; then echo "::error::缺 MIRROR_KEY 密钥"; exit 1; fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MIRROR_KEY -in payload.bin | tar xzf -
+          test -f project.yml || { echo "::error::解密失败：没解出 project.yml"; exit 1; }
+          echo "· 源码已解密到工作目录"
+
+      - name: 选 Xcode 26+
+        run: |
+          set -euo pipefail
+          picked=""
+          for app in /Applications/Xcode*.app; do
+            [ -d "$app" ] || continue
+            v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+                  "$app/Contents/Info.plist" 2>/dev/null || echo 0)
+            echo "· $app → $v"
+            major="${v%%.*}"
+            if [ "${major:-0}" -ge 26 ] 2>/dev/null; then picked="$app"; fi
+          done
+          if [ -z "$picked" ]; then
+            echo "::error::这台 runner 上没有 Xcode 26。底栏用的 glassEffect 是 iOS 26 SDK 的符号，低版本编不了。"
+            ls /Applications || true
+            exit 1
+          fi
+          sudo xcode-select -s "$picked"
+          xcodebuild -version
+          echo "iPhoneOS SDK $(xcrun --sdk iphoneos --show-sdk-version)"
+
+      - name: 装 xcodegen
+        run: |
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen --version
+
+      - name: 判定有没有签名材料
+        id: sign
+        env:
+          KID: ${{ secrets.ASC_KEY_ID }}
+          ISS: ${{ secrets.ASC_ISSUER_ID }}
+          P8: ${{ secrets.ASC_KEY_P8 }}
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          ok=1
+          for n in KID ISS P8 TEAM; do
+            if [ -z "${!n}" ]; then
+              echo "· 缺 $n"
+              ok=0
+            fi
+          done
+          if [ "$ok" = "1" ]; then
+            echo "四个 secret 都在，走签名出包"
+          else
+            echo "::notice::签名材料不全，本次只做未签名编译验证，不出 ipa。"
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
+      - name: 生成工程
+        run: xcodegen generate --spec project.yml
+
+      # ---------------------------------------------------------------- 有密钥
+      - name: 写入 App Store Connect 私钥
+        if: steps.sign.outputs.ok == '1'
+        env:
+          P8: ${{ secrets.ASC_KEY_P8 }}
+          KID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keys" "$HOME/.appstoreconnect/private_keys"
+          python3 ci/asc_key.py "$RUNNER_TEMP/keys/AuthKey_${KID}.p8"
+          cp "$RUNNER_TEMP/keys/AuthKey_${KID}.p8" "$HOME/.appstoreconnect/private_keys/"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${KID}.p8"
+
+      - name: 归档
+        if: steps.sign.outputs.ok == '1'
+        env:
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          KID: ${{ secrets.ASC_KEY_ID }}
+          ISS: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/GeniusTrader.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_${KID}.p8" \
+            -authenticationKeyID "$KID" \
+            -authenticationKeyIssuerID "$ISS" \
+            DEVELOPMENT_TEAM="$TEAM" \
+            CODE_SIGN_STYLE=Automatic \
+            MARKETING_VERSION="${{ inputs.marketing_version || vars.MARKETING_VERSION || '1.0.0' }}" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            2>&1 | tee build/archive.log
+          echo "--- 归档内容 ---"
+          du -sh build/GeniusTrader.xcarchive
+
+      - name: 导出 ipa
+        if: steps.sign.outputs.ok == '1'
+        env:
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          KID: ${{ secrets.ASC_KEY_ID }}
+          ISS: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          sed "s/__TEAM_ID__/$TEAM/g" ci/ExportOptions.plist > build/ExportOptions.plist
+          xcodebuild -exportArchive \
+            -archivePath build/GeniusTrader.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_${KID}.p8" \
+            -authenticationKeyID "$KID" \
+            -authenticationKeyIssuerID "$ISS" \
+            2>&1 | tee build/export.log
+          ls -lh build/export
+
+      - name: 上传 TestFlight
+        # push 触发的默认上传；手动触发看那个开关
+        if: steps.sign.outputs.ok == '1' && (github.event_name == 'push' || inputs.upload)
+        env:
+          KID: ${{ secrets.ASC_KEY_ID }}
+          ISS: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA="$(ls build/export/*.ipa | head -1)"
+          echo "上传 $IPA"
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "$KID" --apiIssuer "$ISS" --verbose 2>&1 | tee build/upload.log
+          echo "::notice::已提交 TestFlight。等 5~15 分钟处理完，在 App Store Connect → TestFlight 里加测试员。"
+
+      # ---------------------------------------------------------------- 没密钥：出未签名 ipa
+      # 没有开发者账号也能拿到能装的包：Release 编出来、完全不打签名，塞进 Payload 压成 ipa。
+      # 拿去用 Sideloadly / AltStore / 爱思 自己签（免费 Apple ID 7 天有效），
+      # 或者交给任何第三方签名服务，都能直接装到真机。
+      - name: 打未签名 ipa
+        if: steps.sign.outputs.ok != '1'
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            2>&1 | tee build/build.log
+          APP_DIR=build/dd/Build/Products/Release-iphoneos
+          APP=$(find "$APP_DIR" -maxdepth 1 -name "*.app" -print -quit)
+          if [ -z "$APP" ]; then echo "::error::没找到 .app"; ls -la "$APP_DIR" || true; exit 1; fi
+          echo "app = $APP"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          # 未签名的包必须干净：残留 _CodeSignature 会让第三方签名工具报「已签名」而拒绝重签
+          find build/Payload -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
+          find build/Payload -name "embedded.mobileprovision" -delete 2>/dev/null || true
+          ( cd build && zip -qry "GeniusTrader-unsigned.ipa" Payload )
+          rm -rf build/Payload
+          ls -lh build/GeniusTrader-unsigned.ipa
+          unzip -l build/GeniusTrader-unsigned.ipa | head -12
+          echo "::notice::未签名 ipa 已生成。下载后用自己的证书重签即可安装。"
+
+      # ---------------------------------------------------------------- 收尾
+      - name: 摘要
+        if: always()
+        run: |
+          {
+            echo "### 构建结果"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 运行号 | ${{ github.run_number }} |"
+            echo "| 是否签名 | ${{ steps.sign.outputs.ok == '1' && '是' || '否（缺 secret）' }} |"
+            echo "| Xcode | $(xcodebuild -version 2>/dev/null | head -1) |"
+            echo "| SDK | $(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null) |"
+            if [ -f build/export/GeniusTrader.ipa ]; then
+              echo "| ipa | $(du -h build/export/GeniusTrader.ipa | cut -f1) |"
+            fi
+            if [ -f build/GeniusTrader-unsigned.ipa ]; then
+              echo "| 未签名 ipa | $(du -h build/GeniusTrader-unsigned.ipa | cut -f1) |"
+              echo ""
+              echo "> 未签名 ipa 在本次运行的 Artifacts 里，下载后用 Sideloadly / AltStore 重签即可装机。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 失败时打印日志尾部
+        if: failure()
+        run: |
+          for f in build/archive.log build/export.log build/build.log; do
+            [ -f "$f" ] || continue
+            echo "===== $f（末尾 80 行）====="
+            # 编译错误单独提成 annotation：Actions 日志接口偶尔取不到，注解一定能看到
+            grep -n "error:" "$f" | head -40 | while IFS= read -r line; do
+              echo "::error title=$f::$line"
+            done
+            tail -n 80 "$f"
+          done
+
+      - name: 取产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeniusTrader-${{ github.run_number }}
+          path: |
+            build/export/*.ipa
+            build/GeniusTrader-unsigned.ipa
+            build/GeniusTrader.xcarchive/dSYMs
+            build/*.log
+          if-no-files-found: warn
+          retention-days: 14
