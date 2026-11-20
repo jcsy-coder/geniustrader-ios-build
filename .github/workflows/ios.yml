@@ -13,6 +13,14 @@ on:
         description: 编译完成后自动上传 TestFlight
         type: boolean
         default: false
+      runner:
+        description: 跑在哪个 macOS 镜像（留空 = macos-26；填 xcode-27 用 iOS 27 SDK）
+        type: string
+        required: false
+      marketing_version:
+        description: 版本号
+        type: string
+        required: false
 
 concurrency:
   group: ios-${{ github.ref }}
