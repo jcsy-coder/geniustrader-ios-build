@@ -28,7 +28,7 @@ jobs:
     name: Archive → ipa
     # macos-26 自带 Xcode 26（液态玻璃必须）。若某个时间点这个 label 不存在，
     # 不用改代码：仓库 Settings → Variables 里加一个 MACOS_RUNNER=macos-15 即可。
-    runs-on: ${{ vars.MACOS_RUNNER || 'macos-26' }}
+    runs-on: ${{ inputs.runner || vars.MACOS_RUNNER || 'macos-26' }}
     timeout-minutes: 60
 
     steps:
@@ -48,6 +48,9 @@ jobs:
       - name: 选 Xcode 26+
         run: |
           set -euo pipefail
+          # runner=xcode-27（GitHub 的 Xcode 27 预览镜像）时要求 ≥27，其余按 ≥26。
+          MIN=26
+          case "${{ inputs.runner }}" in xcode-27*) MIN=27;; esac
           picked=""
           for app in /Applications/Xcode*.app; do
             [ -d "$app" ] || continue
@@ -58,10 +61,10 @@ jobs:
             # 2026-11-20 苹果 ITMS-90725：2027-04 起必须用 iOS 27 SDK。到那时把阈值改成 27，
             # 并确认 runner 镜像自带 Xcode 27（仓库变量 MACOS_RUNNER）。循环取最后一个命中的，
             # 所以镜像里同时有 26/27 时自动挑 27。
-            if [ "${major:-0}" -ge 26 ] 2>/dev/null; then picked="$app"; fi
+            if [ "${major:-0}" -ge "$MIN" ] 2>/dev/null; then picked="$app"; fi
           done
           if [ -z "$picked" ]; then
-            echo "::error::这台 runner 上没有 Xcode 26。底栏用的 glassEffect 是 iOS 26 SDK 的符号，低版本编不了。"
+            echo "::error::这台 runner 上没有 Xcode $MIN。底栏用的 glassEffect 是 iOS 26 SDK 的符号，低版本编不了。"
             ls /Applications || true
             exit 1
           fi
