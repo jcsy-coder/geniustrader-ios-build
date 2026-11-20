@@ -133,8 +133,8 @@ jobs:
             -authenticationKeyIssuerID "$ISS" \
             DEVELOPMENT_TEAM="$TEAM" \
             CODE_SIGN_STYLE=Automatic \
-            MARKETING_VERSION="${{ inputs.marketing_version || vars.MARKETING_VERSION || '1.0.0' }}" \
-            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            MARKETING_VERSION="${{ inputs.marketing_version || vars.MARKETING_VERSION || '2.1.71' }}" \
             2>&1 | tee build/archive.log
           echo "--- 归档内容 ---"
           du -sh build/GeniusTrader.xcarchive
