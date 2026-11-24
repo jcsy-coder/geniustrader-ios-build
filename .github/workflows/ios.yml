@@ -21,6 +21,10 @@ on:
         description: 版本号
         type: string
         required: false
+      unsigned:
+        description: 强制走未签名编译（跳过 Apple 签名服务）
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -90,6 +94,7 @@ jobs:
       - name: 判定有没有签名材料
         id: sign
         env:
+          UNSIGNED: ${{ inputs.unsigned }}
           KID: ${{ secrets.ASC_KEY_ID }}
           ISS: ${{ secrets.ASC_ISSUER_ID }}
           P8: ${{ secrets.ASC_KEY_P8 }}
@@ -98,6 +103,11 @@ jobs:
           PROF: ${{ secrets.DIST_PROFILE_B64 }}
         run: |
           set -euo pipefail
+          if [ "$UNSIGNED" = "true" ]; then
+            echo "· 手动指定走未签名编译（跳过 Apple 签名服务，避免归档卡死）"
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           ok=1
           for n in KID ISS P8 TEAM P12 PROF; do
             if [ -z "${!n}" ]; then
