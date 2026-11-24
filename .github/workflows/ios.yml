@@ -173,6 +173,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
+          # codesign 除了时间戳，还会连 Apple 的 OCSP/CRL 校验证书吊销；runner 到这些服务不通时
+          # 会挂起数分钟（表现就是「归档」卡死）。解析到本地让请求立刻失败，改用本地证书链离线签名。
+          sudo sh -c 'printf "\n127.0.0.1 ocsp.apple.com\n127.0.0.1 ocsp2.apple.com\n127.0.0.1 crl.apple.com\n127.0.0.1 timestamp.apple.com\n" >> /etc/hosts' || true
+          # 确保签名私钥在搜索链里，避免 codesign 等待钥匙串授权而挂起
+          security list-keychains -d user -s build.keychain login.keychain 2>/dev/null || true
+          security unlock-keychain -p "" build.keychain 2>/dev/null || true
           xcodebuild archive \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
