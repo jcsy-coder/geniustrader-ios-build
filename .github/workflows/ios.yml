@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${MIRROR_KEY:-}" ]; then echo "::error::缺 MIRROR_KEY 密钥"; exit 1; fi
-          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:MIRROR_KEY -in payload.bin | tar xzf -
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 -pass env:MIRROR_KEY -in payload.bin | tar xzf -
           test -f project.yml || { echo "::error::解密失败：没解出 project.yml"; exit 1; }
           echo "· 源码已解密到工作目录"
 
