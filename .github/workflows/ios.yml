@@ -103,6 +103,8 @@ jobs:
           TEAM: ${{ secrets.APPLE_TEAM_ID }}
           P12: ${{ secrets.DIST_P12_B64 }}
           PROF: ${{ secrets.DIST_PROFILE_B64 }}
+          WPROF: ${{ secrets.WIDGET_PROFILE_B64 }}
+          WPROF_NAME: ${{ secrets.WIDGET_PROFILE_NAME }}
         run: |
           set -euo pipefail
           if [ "$UNSIGNED" = "true" ]; then
@@ -111,14 +113,14 @@ jobs:
             exit 0
           fi
           ok=1
-          for n in KID ISS P8 TEAM P12 PROF; do
+          for n in KID ISS P8 TEAM P12 PROF WPROF WPROF_NAME; do
             if [ -z "${!n}" ]; then
               echo "· 缺 $n"
               ok=0
             fi
           done
           if [ "$ok" = "1" ]; then
-            echo "签名材料齐全（API Key + 分发证书 + App Store 描述文件），走签名出包"
+            echo "签名材料齐全（API Key + 分发证书 + 主 App / Widget 描述文件），走签名出包"
           else
             echo "::notice::签名材料不全，本次只做未签名编译验证，不出 ipa。"
           fi
@@ -149,6 +151,7 @@ jobs:
           P12_B64: ${{ secrets.DIST_P12_B64 }}
           P12_PASS: ${{ secrets.DIST_P12_PASS }}
           PROF_B64: ${{ secrets.DIST_PROFILE_B64 }}
+          WPROF_B64: ${{ secrets.WIDGET_PROFILE_B64 }}
         run: |
           set -euo pipefail
           echo "$P12_B64" | base64 -D > "$RUNNER_TEMP/dist.p12"
@@ -161,7 +164,11 @@ jobs:
           echo "$PROF_B64" | base64 -D > "$RUNNER_TEMP/dist.mobileprovision"
           UUID=$(security cms -D -i "$RUNNER_TEMP/dist.mobileprovision" | plutil -extract UUID raw -)
           cp "$RUNNER_TEMP/dist.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
-          echo "· 证书已导入系统钥匙串，描述文件 $UUID 已安装"
+          echo "· 主 App 证书已导入系统钥匙串，描述文件 $UUID 已安装"
+          echo "$WPROF_B64" | base64 -D > "$RUNNER_TEMP/widget.mobileprovision"
+          WUUID=$(security cms -D -i "$RUNNER_TEMP/widget.mobileprovision" | plutil -extract UUID raw -)
+          cp "$RUNNER_TEMP/widget.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$WUUID.mobileprovision"
+          echo "· GeniusTraderWidget 描述文件 $WUUID 已安装"
 
       - name: 归档
         if: steps.sign.outputs.ok == '1'
@@ -171,6 +178,7 @@ jobs:
           KID: ${{ secrets.ASC_KEY_ID }}
           ISS: ${{ secrets.ASC_ISSUER_ID }}
           PROF_NAME: ${{ secrets.DIST_PROFILE_NAME }}
+          WPROF_NAME: ${{ secrets.WIDGET_PROFILE_NAME }}
         run: |
           set -euo pipefail
           mkdir -p build
@@ -190,9 +198,10 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROF_NAME" \
+            PROVISIONING_PROFILE_SPECIFIER_GeniusTrader="$PROF_NAME" \
+            PROVISIONING_PROFILE_SPECIFIER_GeniusTraderWidget="$WPROF_NAME" \
             "OTHER_CODE_SIGN_FLAGS=--timestamp=none" \
-            MARKETING_VERSION="${{ inputs.marketing_version || '2.3.1' }}" \
+            MARKETING_VERSION="${{ inputs.marketing_version || '2.3.2' }}" \
             2>&1 | tee build/archive.log
           echo "--- 归档内容 ---"
           du -sh build/GeniusTrader.xcarchive
@@ -204,9 +213,11 @@ jobs:
           KID: ${{ secrets.ASC_KEY_ID }}
           ISS: ${{ secrets.ASC_ISSUER_ID }}
           OTHER_CODE_SIGN_FLAGS: "--timestamp=none"
+          WPROF_NAME: ${{ secrets.WIDGET_PROFILE_NAME }}
         run: |
           set -euo pipefail
-          sed "s/__TEAM_ID__/$TEAM/g" ci/ExportOptions.plist > build/ExportOptions.plist
+          sed -e "s/__TEAM_ID__/$TEAM/g" -e "s|__WIDGET_PROFILE_NAME__|$WPROF_NAME|g" \
+            ci/ExportOptions.plist > build/ExportOptions.plist
           xcodebuild -exportArchive \
             -archivePath build/GeniusTrader.xcarchive \
             -exportPath build/export \
