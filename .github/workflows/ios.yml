@@ -198,8 +198,6 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER_GeniusTrader="$PROF_NAME" \
-            PROVISIONING_PROFILE_SPECIFIER_GeniusTraderWidget="$WPROF_NAME" \
             "OTHER_CODE_SIGN_FLAGS=--timestamp=none" \
             MARKETING_VERSION="${{ inputs.marketing_version || '2.3.2' }}" \
             2>&1 | tee build/archive.log
