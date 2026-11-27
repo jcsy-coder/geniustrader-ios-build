@@ -192,7 +192,7 @@ jobs:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROF_NAME" \
             "OTHER_CODE_SIGN_FLAGS=--timestamp=none" \
-            MARKETING_VERSION="${{ inputs.marketing_version || vars.MARKETING_VERSION || '2.3.0' }}" \
+            MARKETING_VERSION="${{ inputs.marketing_version || vars.MARKETING_VERSION || '2.3.1' }}" \
             2>&1 | tee build/archive.log
           echo "--- 归档内容 ---"
           du -sh build/GeniusTrader.xcarchive
