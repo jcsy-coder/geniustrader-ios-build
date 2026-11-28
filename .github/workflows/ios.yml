@@ -199,7 +199,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             "OTHER_CODE_SIGN_FLAGS=--timestamp=none" \
-            MARKETING_VERSION="${{ inputs.marketing_version || '2.4.5' }}" \
+            MARKETING_VERSION="${{ inputs.marketing_version || '2.4.6' }}" \
             2>&1 | tee build/archive.log
           echo "--- 归档内容 ---"
           du -sh build/GeniusTrader.xcarchive
